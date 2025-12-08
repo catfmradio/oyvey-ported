@@ -1,0 +1,347 @@
+// DoubleHand - lets you use both hands at once
+// kinda buggy but works most of the time
+// dont use on hypixel lol
+package me.alpha432.oyvey.features.modules.combat;
+
+import me.alpha432.oyvey.features.modules.Module;
+import me.alpha432.oyvey.features.settings.Setting;
+import me.alpha432.oyvey.event.impl.UpdateEvent;
+import me.alpha432.oyvey.event.impl.PacketEvent;
+import me.alpha432.oyvey.event.system.Subscribe;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.SwordItem;
+import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.BowItem;
+import net.minecraft.world.item.ShieldItem;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import java.util.Random;
+
+public class DoubleHand extends Module {
+    
+    // settings
+    public Setting<Boolean> enable = new Setting<>("Enable", true);
+    public Setting<Mode> mode = new Setting<>("Mode", Mode.SMART);
+    public Setting<Boolean> attackBoth = new Setting<>("AttackBoth", true);
+    public Setting<Boolean> useBoth = new Setting<>("UseBoth", false); // risky
+    public Setting<Boolean> weaponsOnly = new Setting<>("WeaponsOnly", true);
+    public Setting<Boolean> noShield = new Setting<>("NoShield", true);
+    public Setting<Integer> delay = new Setting<>("Delay", 2, 0, 10);
+    public Setting<Boolean> randomDelay = new Setting<>("RandomDelay", true);
+    public Setting<Boolean> sound = new Setting<>("Sound", false);
+    public Setting<Boolean> combatOnly = new Setting<>("CombatOnly", true);
+    public Setting<Boolean> toggle = new Setting<>("Toggle", false);
+    
+    // my stuff
+    private boolean active = false;
+    private int cooldown = 0;
+    private int lastHand = 0; // 0 = right, 1 = left
+    private final Random rand = new Random();
+    private boolean keyDown = false;
+    
+    // tracking
+    private int actions = 0;
+    private long lastAction = 0;
+    
+    public DoubleHand() {
+        super("DoubleHand", "use both hands", Category.COMBAT);
+    }
+    
+    @Subscribe
+    public void onUpdate(UpdateEvent event) {
+        if (!isEnabled() || !enable.getValue() || mc.player == null || mc.level == null) return;
+        
+        // update cooldown
+        if (cooldown > 0) cooldown--;
+        
+        // check if we should be active
+        active = checkActive();
+        
+        if (!active || cooldown > 0) return;
+        
+        // get items
+        ItemStack main = mc.player.getMainHandItem();
+        ItemStack off = mc.player.getOffhandItem();
+        
+        // check if we can dual wield these
+        if (!canDualWield(main, off)) {
+            return;
+        }
+        
+        // check what player is doing
+        boolean attacking = mc.options.keyAttack.isDown();
+        boolean using = mc.options.keyUse.isDown();
+        
+        if ((attacking && attackBoth.getValue()) || (using && useBoth.getValue())) {
+            // time to use other hand
+            useOtherHand(attacking);
+            
+            // update stuff
+            lastHand = (lastHand + 1) % 2;
+            cooldown = getDelay();
+            actions++;
+            lastAction = System.currentTimeMillis();
+            
+            // play sound maybe
+            if (sound.getValue()) {
+                playSound(attacking);
+            }
+        }
+    }
+    
+    private boolean checkActive() {
+        if (toggle.getValue()) {
+            return keyDown;
+        }
+        
+        if (combatOnly.getValue()) {
+            // only active in combat
+            boolean inCombat = mc.player.hurtTime > 0 || 
+                              mc.player.getLastHurtMob() != null ||
+                              isEnemyNear();
+            if (!inCombat) return false;
+        }
+        
+        if (mode.getValue() == Mode.SMART) {
+            // smart mode - only when it makes sense
+            ItemStack main = mc.player.getMainHandItem();
+            ItemStack off = mc.player.getOffhandItem();
+            return canDualWield(main, off) && (mc.options.keyAttack.isDown() || mc.options.keyUse.isDown());
+        } else if (mode.getValue() == Mode.ALWAYS) {
+            return true;
+        } else if (mode.getValue() == Mode.AGGRESSIVE) {
+            return mc.options.keyAttack.isDown();
+        }
+        
+        return false;
+    }
+    
+    private boolean canDualWield(ItemStack main, ItemStack off) {
+        if (main.isEmpty() || off.isEmpty()) return false;
+        
+        // no shield if enabled
+        if (noShield.getValue() && (main.getItem() instanceof ShieldItem || off.getItem() instanceof ShieldItem)) {
+            return false;
+        }
+        
+        // weapons only check
+        if (weaponsOnly.getValue()) {
+            boolean mainWeapon = main.getItem() instanceof SwordItem || main.getItem() instanceof AxeItem;
+            boolean offWeapon = off.getItem() instanceof SwordItem || off.getItem() instanceof AxeItem;
+            return mainWeapon && offWeapon;
+        }
+        
+        // general check - both should be usable
+        return !(main.getItem() instanceof BowItem) && !(off.getItem() instanceof BowItem);
+    }
+    
+    private void useOtherHand(boolean isAttack) {
+        // decide which hand to use
+        InteractionHand otherHand = lastHand == 0 ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        
+        // do the action
+        if (isAttack) {
+            doOtherAttack(otherHand);
+        } else {
+            doOtherUse(otherHand);
+        }
+    }
+    
+    private void doOtherAttack(InteractionHand hand) {
+        // check if we have a target
+        HitResult hit = mc.hitResult;
+        if (hit == null || hit.getType() != HitResult.Type.ENTITY) return;
+        
+        EntityHitResult entityHit = (EntityHitResult) hit;
+        Entity target = entityHit.getEntity();
+        
+        if (target instanceof LivingEntity living && living.isAlive()) {
+            // attack with other hand
+            mc.gameMode.attack(mc.player, living);
+            mc.player.swing(hand);
+        }
+    }
+    
+    private void doOtherUse(InteractionHand hand) {
+        // use item with other hand
+        ItemStack inHand = mc.player.getItemInHand(hand);
+        if (inHand.isEmpty()) return;
+        
+        // cant use sword/axe like this
+        if (inHand.getItem() instanceof SwordItem || inHand.getItem() instanceof AxeItem) {
+            return;
+        }
+        
+        // send use packet
+        ServerboundUseItemPacket packet = new ServerboundUseItemPacket(hand, 0);
+        mc.player.connection.send(packet);
+        
+        // swing arm
+        mc.player.swing(hand);
+    }
+    
+    @Subscribe
+    public void onPacketSend(PacketEvent.Send event) {
+        if (!active || mc.player == null) return;
+        
+        // listen for player actions to maybe mirror them
+        if (event.getPacket() instanceof ServerboundUseItemPacket packet) {
+            // player used item, maybe mirror it
+            mirrorAction(packet.getHand(), false);
+        } else if (event.getPacket() instanceof ServerboundSwingPacket packet) {
+            // player swung, maybe mirror attack
+            mirrorAction(packet.getHand(), true);
+        }
+    }
+    
+    private void mirrorAction(InteractionHand usedHand, boolean isAttack) {
+        if (cooldown > 0) return;
+        
+        // get other hand
+        InteractionHand otherHand = usedHand == InteractionHand.MAIN_HAND ? 
+                                  InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        
+        // check item in other hand
+        ItemStack otherItem = mc.player.getItemInHand(otherHand);
+        if (otherItem.isEmpty()) return;
+        
+        // wait a bit then mirror (more legit)
+        int wait = randomDelay.getValue() ? rand.nextInt(1, 4) : 2;
+        
+        // schedule mirror action
+        new Thread(() -> {
+            try {
+                Thread.sleep(wait * 50L); // approx ticks
+                if (mc.player != null && active) {
+                    mc.execute(() -> {
+                        if (isAttack) {
+                            // mirror attack
+                            HitResult hit = mc.hitResult;
+                            if (hit != null && hit.getType() == HitResult.Type.ENTITY) {
+                                EntityHitResult entityHit = (EntityHitResult) hit;
+                                if (entityHit.getEntity() instanceof LivingEntity living) {
+                                    mc.gameMode.attack(mc.player, living);
+                                    mc.player.swing(otherHand);
+                                }
+                            }
+                        } else {
+                            // mirror use
+                            ServerboundUseItemPacket mirror = new ServerboundUseItemPacket(otherHand, 0);
+                            mc.player.connection.send(mirror);
+                            mc.player.swing(otherHand);
+                        }
+                        
+                        cooldown = getDelay();
+                        lastHand = otherHand == InteractionHand.MAIN_HAND ? 0 : 1;
+                    });
+                }
+            } catch (InterruptedException e) {
+                // whatever
+            }
+        }).start();
+    }
+    
+    private boolean isEnemyNear() {
+        if (mc.level == null) return false;
+        
+        for (Entity e : mc.level.entitiesForRendering()) {
+            if (e instanceof Player && e != mc.player) {
+                if (mc.player.distanceToSqr(e) < 100) { // 10 blocks
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    private int getDelay() {
+        if (randomDelay.getValue()) {
+            return delay.getValue() + rand.nextInt(-1, 2);
+        }
+        return delay.getValue();
+    }
+    
+    private void playSound(boolean isAttack) {
+        if (mc.level == null) return;
+        
+        if (isAttack) {
+            mc.level.playSound(mc.player, mc.player.blockPosition(),
+                SoundEvents.PLAYER_ATTACK_SWEEP, SoundSource.PLAYERS, 0.6f, 1.0f);
+        } else {
+            mc.level.playSound(mc.player, mc.player.blockPosition(),
+                SoundEvents.ITEM_PICKUP, SoundSource.PLAYERS, 0.4f, 1.2f);
+        }
+    }
+    
+    // for toggle mode
+    public void onKeyPress(int key) {
+        if (toggle.getValue()) {
+            keyDown = true;
+        }
+    }
+    
+    public void onKeyRelease(int key) {
+        if (toggle.getValue()) {
+            keyDown = false;
+        }
+    }
+    
+    @Override
+    public void onEnable() {
+        active = false;
+        cooldown = 0;
+        lastHand = 0;
+        keyDown = false;
+        actions = 0;
+        lastAction = 0;
+    }
+    
+    @Override
+    public void onDisable() {
+        active = false;
+        keyDown = false;
+    }
+    
+    @Override
+    public String getDisplayInfo() {
+        if (!isEnabled()) return null;
+        
+        if (active) {
+            return "ON";
+        }
+        
+        return null;
+    }
+    
+    // modes
+    public enum Mode {
+        SMART("Smart"),
+        ALWAYS("Always"),
+        AGGRESSIVE("Aggro");
+        
+        private final String name;
+        
+        Mode(String name) {
+            this.name = name;
+        }
+        
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+    
+    // some stats
+    public boolean isDualWielding() { return active; }
+    public int getActionCount() { return actions; }
+}
