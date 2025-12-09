@@ -11,6 +11,10 @@ import me.alpha432.oyvey.features.modules.client.Notifications;
 import me.alpha432.oyvey.features.modules.hud.*;
 import me.alpha432.oyvey.features.modules.client.HudEditor;
 import me.alpha432.oyvey.features.modules.combat.Criticals;
+import me.alpha432.oyvey.features.modules.combat.AntiVanish;
+import me.alpha432.oyvey.features.modules.combat.AutoTotem;
+import me.alpha432.oyvey.features.modules.combat.DoubleHand;
+import me.alpha432.oyvey.features.modules.combat.OpMaceAura;
 import me.alpha432.oyvey.features.modules.misc.MCF;
 import me.alpha432.oyvey.features.modules.movement.ReverseStep;
 import me.alpha432.oyvey.features.modules.movement.Step;
@@ -29,19 +33,36 @@ public class ModuleManager implements Jsonable, Util {
     private final List<Module> modules = new ArrayList<>();
 
     public void init() {
+        // HUD modules
         register(new Watermark());
         register(new Coordinates());
         register(new HudEditor());
+        
+        // Client modules
         register(new ClickGui());
         register(new Notifications());
+        
+        // Combat modules
         register(new Criticals());
+        register(new AntiVanish());
+        register(new AutoTotem());
+        register(new DoubleHand());
+        register(new OpMaceAura());
+        
+        // Misc modules
         register(new MCF());
+        
+        // Movement modules
         register(new Step());
         register(new ReverseStep());
+        
+        // Player modules
         register(new FastPlace());
         register(new Velocity());
-        register(new BlockHighlight());
         register(new NoFall());
+        
+        // Render modules
+        register(new BlockHighlight());
     }
 
     public void register(Module module) {
